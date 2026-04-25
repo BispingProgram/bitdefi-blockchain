@@ -1,33 +1,125 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from blockchain import Blockchain, Wallet
 from fastapi.middleware.cors import CORSMiddleware
+import hashlib
 
 app = FastAPI()
 
+# CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # depois a gente restringe
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+# Blockchain
 blockchain = Blockchain()
-wallets = []
+
+# =========================
+# USERS
+# =========================
+users = {}
+
+class UserRequest(BaseModel):
+    username: str
+    password: str
+
+class TxUserRequest(BaseModel):
+    from_user: str
+    to_user: str
+    amount: float
+
 
 # -----------------------
-# MODELO DE REQUISIÇÃO
+# REGISTER
 # -----------------------
+@app.post("/register")
+def register(user: UserRequest):
+    if user.username in users:
+        raise HTTPException(status_code=400, detail="Usuário já existe")
+
+    password_hash = hashlib.sha256(user.password.encode()).hexdigest()
+
+    wallet = Wallet()
+    blockchain.create_genesis_funds(wallet.get_address(), 100)
+
+    users[user.username] = {
+        "password": password_hash,
+        "wallet": wallet
+    }
+
+    return {
+        "message": "Usuário criado",
+        "address": wallet.get_address()
+    }
+
+
+# -----------------------
+# LOGIN
+# -----------------------
+@app.post("/login")
+def login(user: UserRequest):
+    if user.username not in users:
+        raise HTTPException(status_code=404, detail="Usuário não encontrado")
+
+    password_hash = hashlib.sha256(user.password.encode()).hexdigest()
+
+    if users[user.username]["password"] != password_hash:
+        raise HTTPException(status_code=401, detail="Senha inválida")
+
+    return {"message": "Login OK"}
+
+
+# -----------------------
+# BALANCE
+# -----------------------
+@app.get("/balance/{username}")
+def get_balance(username: str):
+    if username not in users:
+        raise HTTPException(status_code=404, detail="Usuário não encontrado")
+
+    wallet = users[username]["wallet"]
+    balance = blockchain.get_balance(wallet.get_address())
+
+    return {"balance": balance}
+
+
+# -----------------------
+# SEND (USER)
+# -----------------------
+@app.post("/send")
+def send(req: TxUserRequest):
+    if req.from_user not in users or req.to_user not in users:
+        raise HTTPException(status_code=404, detail="Usuário inválido")
+
+    sender = users[req.from_user]["wallet"]
+    receiver = users[req.to_user]["wallet"]
+
+    tx = blockchain.create_transaction(
+        sender,
+        receiver.get_address(),
+        req.amount
+    )
+
+    blockchain.add_transaction(tx)
+
+    return {"message": "Transação criada"}
+
+
+# =========================
+# MODO ANTIGO (ÍNDICE)
+# =========================
+wallets = []
+
 class TxRequest(BaseModel):
     from_index: int
     to_index: int
     amount: float
 
 
-# -----------------------
-# CRIAR CARTEIRA
-# -----------------------
 @app.post("/wallet")
 def create_wallet():
     wallet = Wallet()
@@ -38,9 +130,6 @@ def create_wallet():
     return {"address": wallet.get_address()}
 
 
-# -----------------------
-# LISTAR CARTEIRAS
-# -----------------------
 @app.get("/wallets")
 def get_wallets():
     result = []
@@ -52,9 +141,6 @@ def get_wallets():
     return result
 
 
-# -----------------------
-# TRANSAÇÃO
-# -----------------------
 @app.post("/transaction")
 def send_transaction(req: TxRequest):
     sender = wallets[req.from_index]
@@ -71,18 +157,12 @@ def send_transaction(req: TxRequest):
     return {"msg": "Transação criada"}
 
 
-# -----------------------
-# MINERAR
-# -----------------------
 @app.post("/mine")
 def mine():
     blockchain.mine_pending_transactions()
     return {"msg": "Bloco minerado"}
 
 
-# -----------------------
-# VER BLOCKCHAIN
-# -----------------------
 @app.get("/chain")
 def get_chain():
     return [
