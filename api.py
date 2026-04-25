@@ -3,6 +3,12 @@ from pydantic import BaseModel
 from blockchain import Blockchain, Wallet
 from fastapi.middleware.cors import CORSMiddleware
 import hashlib
+from database import engine, SessionLocal
+from models import User
+from sqlalchemy.orm import Session
+
+# cria tabelas
+User.metadata.create_all(bind=engine)
 
 app = FastAPI()
 
@@ -38,7 +44,11 @@ class TxUserRequest(BaseModel):
 # -----------------------
 @app.post("/register")
 def register(user: UserRequest):
-    if user.username in users:
+    db: Session = SessionLocal()
+
+    # verifica se existe
+    existing = db.query(User).filter(User.username == user.username).first()
+    if existing:
         raise HTTPException(status_code=400, detail="Usuário já existe")
 
     password_hash = hashlib.sha256(user.password.encode()).hexdigest()
@@ -46,10 +56,14 @@ def register(user: UserRequest):
     wallet = Wallet()
     blockchain.create_genesis_funds(wallet.get_address(), 100)
 
-    users[user.username] = {
-        "password": password_hash,
-        "wallet": wallet
-    }
+    new_user = User(
+        username=user.username,
+        password=password_hash,
+        address=wallet.get_address()
+    )
+
+    db.add(new_user)
+    db.commit()
 
     return {
         "message": "Usuário criado",
@@ -62,12 +76,16 @@ def register(user: UserRequest):
 # -----------------------
 @app.post("/login")
 def login(user: UserRequest):
-    if user.username not in users:
+    db: Session = SessionLocal()
+
+    db_user = db.query(User).filter(User.username == user.username).first()
+
+    if not db_user:
         raise HTTPException(status_code=404, detail="Usuário não encontrado")
 
     password_hash = hashlib.sha256(user.password.encode()).hexdigest()
 
-    if users[user.username]["password"] != password_hash:
+    if db_user.password != password_hash:
         raise HTTPException(status_code=401, detail="Senha inválida")
 
     return {"message": "Login OK"}
@@ -78,11 +96,14 @@ def login(user: UserRequest):
 # -----------------------
 @app.get("/balance/{username}")
 def get_balance(username: str):
-    if username not in users:
+    db: Session = SessionLocal()
+
+    db_user = db.query(User).filter(User.username == username).first()
+
+    if not db_user:
         raise HTTPException(status_code=404, detail="Usuário não encontrado")
 
-    wallet = users[username]["wallet"]
-    balance = blockchain.get_balance(wallet.get_address())
+    balance = blockchain.get_balance(db_user.address)
 
     return {"balance": balance}
 
@@ -92,15 +113,17 @@ def get_balance(username: str):
 # -----------------------
 @app.post("/send")
 def send(req: TxUserRequest):
-    if req.from_user not in users or req.to_user not in users:
+    db: Session = SessionLocal()
+
+    sender = db.query(User).filter(User.username == req.from_user).first()
+    receiver = db.query(User).filter(User.username == req.to_user).first()
+
+    if not sender or not receiver:
         raise HTTPException(status_code=404, detail="Usuário inválido")
 
-    sender = users[req.from_user]["wallet"]
-    receiver = users[req.to_user]["wallet"]
-
     tx = blockchain.create_transaction(
-        sender,
-        receiver.get_address(),
+        sender.address,
+        receiver.address,
         req.amount
     )
 
