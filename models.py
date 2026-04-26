@@ -5,7 +5,6 @@ class User(Base):
     __tablename__ = "users"
 
     id = Column(Integer, primary_key=True, index=True)
-
-    username = Column(String(50), unique=True, nullable=False)
-    password = Column(String(255), nullable=False)
-    address = Column(String(255), nullable=False)
+    username = Column(String(50), unique=True)
+    password = Column(String(255))
+    address = Column(String(255))
